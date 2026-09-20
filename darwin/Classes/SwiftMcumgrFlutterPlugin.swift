@@ -145,7 +145,19 @@ public class SwiftMcumgrFlutterPlugin: NSObject, FlutterPlugin {
         // Access centralManager (this will lazily create it if needed)
         let manager = centralManager
 
-        // Check if Bluetooth is ready
+        // Only transitional states may wait for a delegate callback. If the
+        // central is already off/denied, another callback may never arrive.
+        switch manager.state {
+        case .poweredOff:
+            throw FlutterError(code: ErrorCode.wrongArguments.rawValue, message: "Bluetooth is powered off", details: call.debugDetails)
+        case .unauthorized:
+            throw FlutterError(code: ErrorCode.wrongArguments.rawValue, message: "Bluetooth is unauthorized", details: call.debugDetails)
+        case .unsupported:
+            throw FlutterError(code: ErrorCode.wrongArguments.rawValue, message: "Unsupported bluetooth state", details: call.debugDetails)
+        default:
+            break
+        }
+
         if manager.state == .poweredOn {
             guard let peripheral = manager.retrievePeripherals(withIdentifiers: [uuid]).first else {
                 throw FlutterError(code: ErrorCode.wrongArguments.rawValue, message: "Can't retrieve peripheral with provided UUID", details: call.debugDetails)

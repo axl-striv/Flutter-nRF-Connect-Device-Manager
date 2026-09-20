@@ -47,17 +47,10 @@ class DeviceUpdateManager extends FirmwareUpdateManager {
   // Stream<ProgressUpdate> get
 
   static Future<DeviceUpdateManager> getInstance(String deviceId) async {
-    try {
-      await methodChannel.invokeMethod(
-          UpdateManagerMethod.initializeUpdateManager.rawValue, deviceId);
-    } catch (error, stack) {
-      FlutterError.reportError(FlutterErrorDetails(
-        exception: error,
-        stack: stack,
-        library: 'mcumgr_flutter',
-        context: ErrorDescription('getInstance: initialize Update Manager'),
-      ));
-    }
+    // Do not construct stream handlers for a native manager that failed to
+    // initialize. Let the caller wait for Bluetooth readiness or show the error.
+    await methodChannel.invokeMethod(
+        UpdateManagerMethod.initializeUpdateManager.rawValue, deviceId);
 
     final um = DeviceUpdateManager._deviceIdentifier(deviceId);
     um._setupUpdateStateStream();
