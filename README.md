@@ -280,3 +280,23 @@ try {
   await mcumgrSettings.dispose();
 }
 ```
+
+### Android MCUboot reboot readiness
+
+For the image-list update API in `TEST_AND_CONFIRM` mode, a positive
+`estimatedSwapTime` is a maximum reboot-readiness budget rather than a fixed
+sleep. After the reset/disconnect, the plugin probes image state and forwards
+Nordic's original confirm request as soon as the expected image hashes are
+active. Image upload, confirmation and confirmation validation remain Nordic's.
+The budget starts at reset acknowledgement (request time if disconnect beats
+acknowledgement). It also bounds a hung read; it does not bound the whole OTA.
+Only disconnects and timeouts retry. Authentication, Bluetooth-off and protocol
+errors fail immediately. Cancellation/release invalidates pending probes and
+late callbacks. Other upgrade modes, SUIT and the legacy single-image API keep
+their existing wait behavior.
+
+`RebootReadyTransportTest` covers early/slow readiness, wrong active images,
+hung/transient reads, deadline/late replies, cancellation/retry, malformed and
+permanent failures, and passing through test writes and disabled gating.
+Run it via the host Android project's `:mcumgr_flutter:testDebugUnitTest` task.
+Physical Android OTA validation is still required.

@@ -10,6 +10,7 @@ import io.runtime.mcumgr.dfu.mcuboot.FirmwareUpgradeManager.State
 import io.runtime.mcumgr.dfu.mcuboot.model.ImageSet
 import io.runtime.mcumgr.dfu.mcuboot.model.TargetImage
 import io.runtime.mcumgr.exception.McuMgrException
+import io.runtime.mcumgr.image.McuMgrImage
 import io.runtime.mcumgr.managers.ImageManager
 import no.nordicsemi.android.mcumgr_flutter.ext.shouldLog
 import no.nordicsemi.android.mcumgr_flutter.ext.toProto
@@ -43,7 +44,8 @@ class UpdateManager(
 		private val updateProgressStreamHandler: StreamHandler,
 		private val logStreamHandler: StreamHandler
 ): FirmwareUpgradeCallback<State> {
-	private val manager: FirmwareUpgradeManager = FirmwareUpgradeManager(transport, this)
+	private val rebootTransport = RebootReadyTransport(transport, log = { this.transport.log(it) })
+	private val manager: FirmwareUpgradeManager = FirmwareUpgradeManager(rebootTransport, this)
 	private val address: String = transport.bluetoothDevice.address
 	private val transport: LoggableMcuMgrBleTransport = transport as LoggableMcuMgrBleTransport
 	val imageManager: ImageManager = ImageManager(transport)
@@ -63,15 +65,22 @@ class UpdateManager(
 	private val TAG: String? = "MyActivity"
 
 	fun start(images: List<Pair<Int, ByteArray>>, config: FirmwareUpgradeConfiguration?) {
+		val targetImages = images.map { TargetImage(it.first, it.second) }
+		val readinessBudget = if (config?.firmwareUpgradeMode == FirmwareUpgradeManager.Mode.TEST_AND_CONFIRM &&
+			targetImages.all { it.image is McuMgrImage })
+			config.estimatedSwapTime else 0L
+		rebootTransport.configure(readinessBudget, targetImages.groupBy { it.imageIndex }
+			.mapValues { (_, images) -> images.map { it.image.hash } })
 		val settings = FirmwareUpgradeManager.Settings.Builder()
 		if (config != null) {
 			manager.setMode(config.firmwareUpgradeMode)
 			settings.setMemoryAlignment(config.byteAlignment)
-			settings.setEstimatedSwapTime(config.estimatedSwapTime.toInt())
+			// The gate uses this as a deadline; Nordic must not also sleep it.
+			settings.setEstimatedSwapTime(if (readinessBudget > 0) 0 else config.estimatedSwapTime.toInt())
 			settings.setWindowCapacity(config.pipelineDepth)
 		}
 		settings.setEraseAppSettings(config?.eraseAppSettings ?: true)
-		val imageSet = ImageSet(images.map { TargetImage(it.first, it.second) })
+		val imageSet = ImageSet(targetImages)
 		// print images to log
 		images.forEach {
 			val imageNumber = it.first
@@ -86,6 +95,7 @@ class UpdateManager(
 	}
 
 	fun start(imageData: ByteArray, config: FirmwareUpgradeConfiguration?) {
+		rebootTransport.configure(0, emptyMap())
 		if (config != null) {
 			manager.setMode(config.firmwareUpgradeMode)
 		}
@@ -109,22 +119,30 @@ class UpdateManager(
 		}
 	}
 	/** Cancel the transfer. */
-	fun cancel() = manager.cancel()
+	fun cancel() {
+		val waiting = rebootTransport.isWaiting
+		rebootTransport.cancelPending()
+		manager.cancel()
+		if (waiting) {
+			transport.release()
+			onUpgradeCanceled(manager.state)
+		}
+	}
 	/** True if the firmware upgrade is paused, false otherwise. */
 	var isPaused = manager.isPaused
 	/**	True if the firmware upgrade is in progress, false otherwise. */
 	var isInProgress = manager.isInProgress
 	/** Read all logs */
 	fun readAllLogs(clearLogs: Boolean = false) : ProtoReadMessagesResponse {
-		return (manager.transporter as? LoggableMcuMgrBleTransport)!!.readLogs(clearLogs)
+		return transport.readLogs(clearLogs)
 	}
 
 	fun clearLogs() {
-		(manager.transporter as? LoggableMcuMgrBleTransport)!!.clearLogs()
+		transport.clearLogs()
 	}
 
 	fun releaseTransport() {
-		transport.release();
+		rebootTransport.release()
 	}
 
 	override fun onUpgradeStarted(controller: FirmwareUpgradeController?) {
